@@ -1,0 +1,125 @@
+/*
+ * Copyright 2017 Oracle, Inc.  All rights reserved.
+ * Use is subject to license terms.
+ *
+ * ZFS Storage Appliance Workflow
+ *
+ * This workflow collect snoop output in background and keep running until user donot terminate script.
+ *
+ */
+
+var start_scriptfile = "snoop_nfs.sh";
+var pathname = "/var/tmp/snoop_collect";
+var makescript = function (vars, s)
+{
+	var script = '';
+	var v;
+	for (v in vars)
+		script = script + v + '="' + vars[v] + '"\n';
+	return (script + s);
+}
+
+var start_shellscript = function(params)
+{
+	audit('Start +start_shellscript');
+	/* create the shell script */
+	var script = makescript( { outfile: pathname + '/' + start_scriptfile,
+								pathname: pathname,
+							},
+		'\
+		echo \'while true \' >> $outfile;\n\
+                 echo \' do \' >> $outfile;\n\
+		echo \'for i in {1..30};\' >> $outfile;\n\
+		echo \'do \' >> $outfile;\n\
+		echo \'snoop -o /var/tmp/snoop.cap.nfs.output.$i  rpc nfs & \' >> $outfile;\n\
+		echo \'NFS_PID=$! \' >> $outfile\n\
+		echo \'snoop -o /var/tmp/snoop.cap.lockmgr.output.$i  rpc nlockmgr & \'>> $outfile;\n\
+		echo \'NLM_PID=$! \' >> $outfile;\n\
+		echo \'sleep 60 \' >> $outfile;\n\
+		echo \'kill $NFS_PID $NLM_PID \'>> $outfile;\n\
+		echo \'done \' >> $outfile;\n\
+		echo \'done \' >> $outfile;\n\
+	');
+	shell(script );
+	/* give execute permission to the script */
+	shell('chmod +x ' + pathname + '/' +  start_scriptfile);
+	/* run the shell script */
+	try
+	{
+		shell("ctrun -l none " + pathname + "/" + start_scriptfile + " \&");
+	} catch(err) {
+		throw(err);
+	}
+	audit('Compete' + start_shellscript );
+};
+
+var stop_shellscript = function(params,err)
+  {
+    var err = {};
+	  try
+      {
+		    shell("kill -9" +  " `ps -ef |grep " +  start_scriptfile + "|grep -v grep |awk '{print $2}'`");
+			shell("kill -9 `ps -ef |grep snoop|grep -v grep |awk '{print $2}'`");
+			shell("mv /var/tmp/snoop.cap.*.output.* /var/ak/dropbox/" );
+			shell("rm " + pathname + "/*" );
+	    } catch(err) {
+		                throw(err);
+	   }
+  };
+
+ var execute = function (params) 
+{
+	if (params.action == 'start')
+	{
+		audit('Collecting NFS and lockmgr packets in background for ' + params.email);
+		shell("mkdir -p " + pathname);
+		var PID = ParsInit(shell("ps -ef |egrep 'snoop -o /var/tmp/snoop.cap.nfs.output|snoop_packet_capture.sh'|grep -v egrep|awk '{print $2}'|wc -l"));
+		if ( PID <= 0 )
+		{
+			 start_shellscript(params);
+			 return('Running snoop script information in background.');
+		}else
+       return('Already running in background.');
+	}
+
+	if (params.action == 'stop')
+	{
+     var count = ParseInt(shell("ps -ef |grep " +  start_scriptfile + "|grep -v grep |awk '{print $2}'|wc -l"));
+		if ( count > 0 ) 
+     {
+       audit('Killing snoop script ' + start_scriptfile + ' running in background.');
+		   stop_shellscript(params);
+		   var msg = 'Killed snoop script';
+		   return(msg);
+     }else {
+			      var msg = "snoop command and " + start_scriptfile + " script is not running...";
+			      return(msg);
+		   }
+  }
+};
+var params = {
+   	email: {
+		  label: 'E-mail address of service personnel',
+			 type: 'EmailAddress'
+	},
+	action: {
+		label: 'Choose Action',
+		type:'ChooseOne',
+		options: ['start', 'stop'],
+		optionlabels: [ 'start snoop ', 'stop snoop']
+	}
+};
+var workflow = {
+	name: 'Collect snoop output',
+	origin: 'Oracle Inc.',
+	author: 'Prakash Singh',
+	description: 'Collects nfs and lockmgr packtes ',
+	required: '2013.06.05',
+	version: '1.0.2',
+	hidden: false,
+	execute: execute,
+	parameters: params
+};
+
+
+
